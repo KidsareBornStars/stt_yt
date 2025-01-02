@@ -54,7 +54,7 @@ class MyApp(App):
         self.play_video(video_id)
 
     def search_youtube(self, query):
-        api_key = "AIzaSyBvIAUcY-LNvtWSxl2smOLhni_5NhetKE8"
+        api_key = 'MY_API_KEY'
         youtube = build("youtube", "v3", developerKey=api_key)
         request = youtube.search().list(q=query, part="snippet", type="video", maxResults=1)
         response = request.execute()

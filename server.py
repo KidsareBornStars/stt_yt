@@ -60,7 +60,7 @@ async def transcribe_audio():
 @app.post("/search_youtube/")
 async def search_youtube(request: YouTubeSearchRequest):
     """Searches YouTube for the given query and returns the video ID."""
-    api_key = "AIzaSyBvIAUcY-LNvtWSxl2smOLhni_5NhetKE8"  # Replace with your actual API key
+    api_key = 'MY_API_KEY'  # Replace with your actual API key
     youtube = build("youtube", "v3", developerKey=api_key)
     try:
         response = youtube.search().list(
