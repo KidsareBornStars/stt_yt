@@ -127,9 +127,9 @@ class MyApp(App):
         response = requests.get(f"{BASE_URL}/download_and_play/{video_id}")
         if response.status_code == 200:
             video_path = response.json()["video_path"]
-            # Label 업데이트 - 파일 이름만 추출
-            filename = os.path.basename(video_path)
-            self.info_label.text += f'\n재생 중인 영상: {filename}'
+            video_title = response.json()["video_title"]
+
+            self.info_label.text += f'\n재생 중인 영상: {video_title}'
             # 비디오 소스 설정 및 재생
             self.video.source = video_path
             self.video.state = 'play'
