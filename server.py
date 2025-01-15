@@ -1,90 +1,94 @@
-from fastapi import FastAPI, UploadFile, HTTPException
-from pydantic import BaseModel
-import whisper
+from flask import Flask, request, jsonify
+from faster_whisper import WhisperModel
 from pytubefix import YouTube
 from googleapiclient.discovery import build
+import torch
 import os
-import subprocess
-import shutil
+os.environ['YOUTUBE_API_KEY'] = 'AIzaSyBvIAUcY-LNvtWSxl2smOLhni_5NhetKE8'
+import scipy.io.wavfile as wavfile
 import sounddevice as sd
 import warnings
 warnings.filterwarnings("ignore")
 
-app = FastAPI()
+app = Flask(__name__)
 
 # Global Whisper model initialization
-model = whisper.load_model("turbo")
+model = WhisperModel("turbo", device="cuda" if torch.cuda.is_available() else "cpu")
 
-class YouTubeSearchRequest(BaseModel):
-    query: str
-
-@app.post("/record/")
-async def record_audio():
-    """Records audio from the specified microphone and saves it as 'audio.wav'."""
-    output_file = "audio.wav"
+@app.route("/record/", methods=["POST"])
+def record_audio():
+    """Receives audio file from client and saves it as 'audio.wav'."""
     try:
-        devices = sd.query_devices()
-        input_index = sd.default.device[0]
-        input_device = devices[input_index]["name"]
-
-        # FFmpeg command to record audio
-        command = f'ffmpeg -f dshow -i audio="{input_device}" -t 5 -y audio.wav'
-        subprocess.run(command, shell=True, check=True)
-        return {"message": "Audio recorded successfully.", "file": output_file}
+        if 'audio' not in request.files:
+            return jsonify({"detail": "No audio file provided"}), 400
+        
+        audio_file = request.files['audio']
+        audio_file.save('audio.wav')
+        
+        return jsonify({"message": "Audio file received successfully.", "file": 'audio.wav'})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Audio recording failed: {str(e)}")
+        return jsonify({"detail": f"Audio file processing failed: {str(e)}"}), 500
 
-@app.post("/transcribe/")
-async def transcribe_audio():
+@app.route("/transcribe/", methods=["POST"])
+def transcribe_audio():
     """Transcribes 'audio.wav' using Whisper and returns the recognized text."""
     try:
-        # Load and process the audio file
-        audio = whisper.load_audio("audio.wav")
-        audio = whisper.pad_or_trim(audio)
-
-        # Create Mel spectrogram
-        mel = whisper.log_mel_spectrogram(audio, n_mels=model.dims.n_mels).to(model.device)
-
-        # Detect language
-        _, probs = model.detect_language(mel)
-        language = max(probs, key=probs.get)
+        # 언어 감지 먼저 수행
+        segments, info = model.transcribe(
+            "audio.wav",
+            beam_size=5,
+            word_timestamps=False,
+            language=None  # 자동 언어 감지 활성화
+        )
         
-        # Decode audio
-        options = whisper.DecodingOptions()
-        result = whisper.decode(model, mel, options)
-
-        return {"language": language, "text": result.text}
+        detected_language = info.language
+        print(f"감지된 언어: {detected_language}")
+        
+        # 감지된 언어로 다시 전사
+        segments, _ = model.transcribe(
+            "audio.wav",
+            beam_size=5,
+            word_timestamps=False,
+            language=detected_language
+        )
+        result = " ".join([segment.text for segment in segments])
+        
+        return jsonify({"language": detected_language, "text": result})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
+        return jsonify({"detail": f"Transcription failed: {str(e)}"}), 500
 
-@app.post("/search_youtube/")
-async def search_youtube(request: YouTubeSearchRequest):
+@app.route("/search_youtube/", methods=["POST"])
+def search_youtube():
     """Searches YouTube for the given query and returns the video ID."""
-    api_key = 'MY_API_KEY'  # Replace with your actual API key
+    api_key = os.getenv('YOUTUBE_API_KEY')  
     youtube = build("youtube", "v3", developerKey=api_key)
     try:
+        data = request.get_json()
         response = youtube.search().list(
-            q=request.query, part="snippet", type="video", maxResults=1
+            q=data["query"], part="snippet", type="video", maxResults=1
         ).execute()
         video_id = response["items"][0]["id"]["videoId"]
-        return {"video_id": video_id}
+        return jsonify({"video_id": video_id})
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"YouTube search failed: {str(e)}")
+        return jsonify({"detail": f"YouTube search failed: {str(e)}"}), 500
 
-@app.get("/download_and_play/{video_id}")
-async def download_and_play(video_id: str):
-    """Downloads audio from a YouTube video and plays it."""
+@app.route("/download_and_play/<video_id>", methods=["GET"])
+def download_and_play(video_id):
+    """Downloads video from YouTube and returns the file path."""
     video_url = f"https://www.youtube.com/watch?v={video_id}"
     try:
         yt = YouTube(video_url)
-        ys = yt.streams.get_audio_only()
-        ys.download(output_path=".", filename="audio.mp3")
-
-        # Play audio file
-        if os.name == "nt":  # Windows
-            os.system("start audio.mp3")
-        elif os.name == "posix":  # macOS or Linux
-            os.system("open audio.mp3" if "darwin" in os.uname().sysname.lower() else "xdg-open audio.mp3")
-        return {"message": "Audio downloaded and played successfully."}
+        ys = yt.streams.filter(progressive=True, file_extension='mp4').first()
+        # 절대 경로로 저장
+        video_path = os.path.abspath(ys.download(output_path=".", filename="video.mp4"))
+        
+        return jsonify({
+            "message": "Video downloaded successfully.",
+            "video_path": video_path,  # 절대 경로 반환
+            "video_title": yt.title    # 영상 제목 추가
+        })
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Playback failed: {str(e)}")
+        return jsonify({"detail": f"Download failed: {str(e)}"}), 500
+
+if __name__ == "__main__":
+    app.run(host="192.168.1.102", port=8000)

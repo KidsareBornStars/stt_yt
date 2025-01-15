@@ -3,14 +3,15 @@ from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.textinput import TextInput
 from kivy.uix.video import Video
-import whisper
 from pytubefix import YouTube
 from pytubefix.cli import on_progress
 from googleapiclient.discovery import build
 import os
+# os.environ['YOUTUBE_API_KEY'] = 'your_api_key_here'
 import sounddevice as sd
 import warnings
 import torch
+import scipy.io.wavfile as wavfile
 from faster_whisper import WhisperModel
 warnings.filterwarnings("ignore")
 
@@ -30,20 +31,16 @@ class MyApp(App):
         return self.layout
 
     def record_and_transcribe(self, instance):
-        # Record audio and save it as 'audio.wav'
-        os.system('ffmpeg -f avfoundation -i ":0" -t 5 -y audio.wav')
-
-        # # load audio and pad/trim it to fit 30 seconds
-        # audio = whisper.load_audio("audio.wav")
-        # audio = whisper.pad_or_trim(audio)
-
-        # # make log-Mel spectrogram and move to the same device as the model
-        # mel = whisper.log_mel_spectrogram(audio, n_mels=self.model.dims.n_mels).to(self.model.device)
-
-        # # detect the spoken language
-        # _, probs = self.model.detect_language(mel)
-        # print(f"Detected language: {max(probs, key=probs.get)}")
-
+        # OS 독립적인 오디오 녹음 구현
+        fs = 44100  # 샘플링 레이트
+        duration = 7  # 녹음 시간 (초)
+        
+        print("녹음을 시작합니다...")
+        recording = sd.rec(int(duration * fs), samplerate=fs, channels=1)
+        sd.wait()  # 녹음이 끝날 때까지 대기
+        
+        # WAV 파일로 저장
+        wavfile.write('audio.wav', fs, recording)
         
         # 언어 감지 먼저 수행
         segments, info = self.model.transcribe(
@@ -59,7 +56,7 @@ class MyApp(App):
         # 감지된 언어로 다시 전사
         segments, _ = self.model.transcribe(
             "audio.wav",
-            beam_size=2,
+            beam_size=5,
             word_timestamps=False,
             language=detected_language  # 감지된 언어 사용
         )

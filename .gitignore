@@ -171,4 +171,5 @@ cython_debug/
 .pypirc
 *.json
 *.wav
+*.mp4
 
