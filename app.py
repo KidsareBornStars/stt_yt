@@ -8,13 +8,15 @@ from kivy.core.video import Video as CoreVideo
 from kivy.core.text import LabelBase
 import requests
 import warnings
-import os
+warnings.filterwarnings("ignore")
 import sounddevice as sd
 import scipy.io.wavfile as wavfile
-import numpy as np
-warnings.filterwarnings("ignore")
+import os
+os.environ['PO_TOKEN'] = 'PO_TOKEN'
+os.environ['VISITORDATA'] = 'VISITORDATA'
+from pytubefix import YouTube
 
-BASE_URL = "http://192.168.1.102:8000"
+BASE_URL = "http://1.227.153.93:8000"
 
 # 앱 시작 전에 FFPy 프로바이더 설정
 CoreVideo._video = VideoFFPy
@@ -22,7 +24,7 @@ CoreVideo._video = VideoFFPy
 # 한글 폰트 등록
 LabelBase.register(
     name='NanumGothic',
-    fn_regular='../ocr_tts/fonts/NanumGothic.ttf'  # 나눔고딕 폰트 파일 경로
+    fn_regular='fonts/NanumGothic.ttf'  # 나눔고딕 폰트 파일 경로
 )
 
 class MyApp(App):
@@ -123,19 +125,21 @@ class MyApp(App):
             print(f"Error: {response.json()['detail']}")
 
     def download_and_play(self, video_id):
-        """Calls the server to download YouTube video and play it in the app."""
-        response = requests.get(f"{BASE_URL}/download_and_play/{video_id}")
-        if response.status_code == 200:
-            video_path = response.json()["video_path"]
-            video_title = response.json()["video_title"]
-
-            self.info_label.text += f'\n재생 중인 영상: {video_title}'
+        """Downloads video from YouTube and returns the file path."""
+        video_url = f"https://www.youtube.com/watch?v={video_id}"
+        try:
+            yt = YouTube(video_url, use_po_token=True)
+            ys = yt.streams.get_lowest_resolution()
+            # 절대 경로로 저장
+            video_path = os.path.abspath(ys.download(output_path=".", filename="video.mp4"))
+            self.info_label.text += f'\n재생 중인 영상: {yt.title}'
             # 비디오 소스 설정 및 재생
             self.video.source = video_path
             self.video.state = 'play'
-        else:
+            return video_path, yt.title  # 경로와 제목 반환
+        except Exception as e:
             self.info_label.text += '\n영상 다운로드 실패'
-            print(f"Error: {response.json()['detail']}")
+            raise Exception(f"Download failed: {str(e)}")  # 예외 처리
 
 if __name__ == "__main__":
     MyApp().run()

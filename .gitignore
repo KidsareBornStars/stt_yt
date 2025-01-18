@@ -173,3 +173,7 @@ cython_debug/
 *.wav
 *.mp4
 
+fonts/
+.stty/
+*.wav
+*.exe

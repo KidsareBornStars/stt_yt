@@ -1,12 +1,11 @@
 from flask import Flask, request, jsonify
 from faster_whisper import WhisperModel
 from pytubefix import YouTube
+from pytubefix.cli import on_progress
 from googleapiclient.discovery import build
 import torch
 import os
-os.environ['YOUTUBE_API_KEY'] = 'AIzaSyBvIAUcY-LNvtWSxl2smOLhni_5NhetKE8'
-import scipy.io.wavfile as wavfile
-import sounddevice as sd
+os.environ['YOUTUBE_API_KEY'] = 'MY_YOUTUBE_API_KEY'
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -75,20 +74,7 @@ def search_youtube():
 @app.route("/download_and_play/<video_id>", methods=["GET"])
 def download_and_play(video_id):
     """Downloads video from YouTube and returns the file path."""
-    video_url = f"https://www.youtube.com/watch?v={video_id}"
-    try:
-        yt = YouTube(video_url)
-        ys = yt.streams.filter(progressive=True, file_extension='mp4').first()
-        # 절대 경로로 저장
-        video_path = os.path.abspath(ys.download(output_path=".", filename="video.mp4"))
-        
-        return jsonify({
-            "message": "Video downloaded successfully.",
-            "video_path": video_path,  # 절대 경로 반환
-            "video_title": yt.title    # 영상 제목 추가
-        })
-    except Exception as e:
-        return jsonify({"detail": f"Download failed: {str(e)}"}), 500
+    return jsonify({"detail": "This endpoint is no longer available."}), 410
 
 if __name__ == "__main__":
-    app.run(host="192.168.1.102", port=8000)
+    app.run(host="192.168.55.18", port=8000)
