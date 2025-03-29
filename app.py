@@ -17,8 +17,8 @@ import os
 import io
 import tempfile
 
-# BASE_URL = "http://1.227.153.93:8000" # 배포용
-BASE_URL = "http://192.168.55.18:8000" # 테스트용
+BASE_URL = "http://1.227.153.93:8000" # 배포용
+# BASE_URL = "http://192.168.55.18:8000" # 테스트용
 
 # 기존 폰트 등록 코드 대체
 def setup_system_fonts():
