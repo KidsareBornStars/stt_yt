@@ -197,46 +197,33 @@ class MyApp(App):
             return None
         
     def play_video(self, video_id):
-        """최고 품질의 비디오와 오디오를 병합하여 재생합니다."""
+        """스트림 URL을 받아와서 직접 재생합니다."""
         try:
-            self.info_label.text = "고품질 비디오 다운로드 중..."
+            self.info_label.text = "스트림 정보 가져오는 중..."
             
-            # 병합된 비디오 다운로드 요청
+            # 스트림 URL 요청
             response = requests.post(
-                f"{BASE_URL}/download_merged_video/", 
-                json={"video_id": video_id},
-                stream=True
+                f"{BASE_URL}/get_stream_url/", 
+                json={"video_id": video_id}
             )
             
             if response.status_code != 200:
                 error_msg = response.json().get('detail', 'Unknown error')
-                self.info_label.text = f'비디오 처리 실패: {error_msg}'
+                self.info_label.text = f'스트림 처리 실패: {error_msg}'
                 return None
             
-            video_title = response.headers.get('X-Video-Title', 'Unknown')
-            temp_file = os.path.join(tempfile.gettempdir(), f"temp_video_{int(time.time())}.mp4")
-            
-            # 스트리밍 응답을 파일로 저장
-            with open(temp_file, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
+            stream_data = response.json()
+            video_title = stream_data['title']
+            stream_url = stream_data['stream_url']
             
             # 이전 비디오 정리
             if self.video:
                 self.video.state = 'stop'
             
-            if self.current_video_path and os.path.exists(self.current_video_path):
-                self.schedule_cleanup(self.current_video_path)
-            
-            # 새 비디오 추적
-            self.downloaded_videos.append(temp_file)
-            self.current_video_path = temp_file
-            
             # 비디오 위젯 업데이트
             self.layout.remove_widget(self.video)
             self.video = UIVideo(
-                source=temp_file,
+                source=stream_url,  # 스트림 URL 직접 사용
                 state='stop',
                 size_hint=(1, 0.9),
                 options={'eos': 'loop'}
@@ -250,10 +237,8 @@ class MyApp(App):
         except Exception as e:
             error_type = type(e).__name__
             error_msg = str(e)
-            print(f"비디오 처리 실패: {error_type} - {error_msg}")
-            import traceback
-            traceback.print_exc()
-            self.info_label.text = f'비디오 처리 실패: {error_type}'
+            print(f"스트림 처리 실패: {error_type} - {error_msg}")
+            self.info_label.text = f'스트림 처리 실패: {error_type}'
             return None
 
     def cleanup_old_videos(self):

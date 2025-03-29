@@ -9,6 +9,7 @@ import warnings
 warnings.filterwarnings("ignore")
 import io
 import yt_dlp
+import re
 
 app = Flask(__name__)
 
@@ -199,38 +200,53 @@ def check_video_size():
 
 @app.route("/download_merged_video/", methods=["POST"])
 def download_merged_video():
-    """비디오와 오디오를 병합하여 다운로드합니다."""
+    """중간 품질의 비디오와 오디오를 병합하여 다운로드합니다."""
     try:
         data = request.get_json()
         video_id = data["video_id"]
         video_url = f"https://www.youtube.com/watch?v={video_id}"
         
-        # 임시 파일을 저장할 디렉토리 생성
         temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp")
         if not os.path.exists(temp_dir):
             os.makedirs(temp_dir)
             
         ydl_opts = {
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best',
+            'format': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720]',
             'quiet': True,
             'no_warnings': True,
             'noplaylist': True,
             'outtmpl': os.path.join(temp_dir, '%(id)s.%(ext)s'),
-            'merge_output_format': 'mp4'
+            'merge_output_format': 'mp4',
+            'format_sort': [
+                'res:720',
+                'res:480',
+                'ext:mp4:m4a'
+            ]
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=True)
             video_title = info.get('title', 'Unknown')
+            
+            # 파일 이름에서 사용할 수 없는 문자 제거
+            safe_title = re.sub(r'[^\x00-\x7F]+', '', video_title)  # ASCII 문자만 유지
+            safe_title = re.sub(r'[<>:"/\\|?*]', '', safe_title)    # Windows 파일명 제한 문자 제거
+            safe_title = safe_title.strip()                         # 앞뒤 공백 제거
+            
+            if not safe_title:  # 제목이 모두 제거된 경우
+                safe_title = f"video_{video_id}"
+            
             output_path = os.path.join(temp_dir, f"{info['id']}.mp4")
             
             response = send_file(
                 output_path,
                 mimetype='video/mp4',
                 as_attachment=True,
-                download_name=f"{video_title}.mp4"
+                download_name=f"{safe_title}.mp4"
             )
-            response.headers['X-Video-Title'] = video_title
+            
+            # ASCII 문자만 포함된 제목 사용
+            response.headers['X-Video-Title'] = safe_title
             return response
             
     except Exception as e:
@@ -240,6 +256,39 @@ def download_merged_video():
         import traceback
         traceback.print_exc()
         return jsonify({"detail": f"Failed to download merged video: {error_type} - {error_msg}"}), 500
+
+@app.route("/get_stream_url/", methods=["POST"])
+def get_stream_url():
+    """YouTube 비디오의 스트림 URL을 반환합니다."""
+    try:
+        data = request.get_json()
+        video_id = data["video_id"]
+        video_url = f"https://www.youtube.com/watch?v={video_id}"
+        
+        ydl_opts = {
+            'format': 'best[height<=720]',  # 720p 이하 최고 품질
+            'quiet': True,
+            'no_warnings': True,
+            'noplaylist': True,
+        }
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=False)
+            stream_url = info['url']
+            title = info.get('title', 'Unknown')
+            
+            return jsonify({
+                'stream_url': stream_url,
+                'title': title,
+                'duration': info.get('duration'),
+                'format': info.get('format')
+            })
+            
+    except Exception as e:
+        error_type = type(e).__name__
+        error_msg = str(e)
+        print(f"스트림 URL 추출 실패: {error_type} - {error_msg}")
+        return jsonify({"detail": f"Failed to get stream URL: {error_type} - {error_msg}"}), 500
 
 if __name__ == "__main__":
     app.run(host="192.168.55.18", port=8000)
