@@ -1,40 +1,58 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from faster_whisper import WhisperModel
-from pytubefix import YouTube
-from pytubefix.cli import on_progress
 from googleapiclient.discovery import build
 import torch
 import os
-os.environ['YOUTUBE_API_KEY'] = 'MY_YOUTUBE_API_KEY'
+os.environ['YOUTUBE_API_KEY'] = 'AIzaSyBvIAUcY-LNvtWSxl2smOLhni_5NhetKE8'
+os.environ['FLASK_ENV'] = 'development'
 import warnings
 warnings.filterwarnings("ignore")
+import io
+import yt_dlp
 
 app = Flask(__name__)
 
 # Global Whisper model initialization
 model = WhisperModel("turbo", device="cuda" if torch.cuda.is_available() else "cpu")
 
+# 서버 시작 전에 전역 변수 초기화
+audio_data = None
+
 @app.route("/record/", methods=["POST"])
 def record_audio():
-    """Receives audio file from client and saves it as 'audio.wav'."""
+    """클라이언트로부터 오디오 데이터를 받아 메모리에 저장합니다."""
     try:
         if 'audio' not in request.files:
             return jsonify({"detail": "No audio file provided"}), 400
         
         audio_file = request.files['audio']
-        audio_file.save('audio.wav')
         
-        return jsonify({"message": "Audio file received successfully.", "file": 'audio.wav'})
+        # 파일 저장 대신 메모리에 바이트 데이터로 보관
+        audio_bytes = audio_file.read()
+        
+        # 파일로 저장하지 않고 전역 변수에 보관
+        global audio_data
+        audio_data = audio_bytes
+        
+        return jsonify({"message": "Audio data received successfully."})
     except Exception as e:
-        return jsonify({"detail": f"Audio file processing failed: {str(e)}"}), 500
+        return jsonify({"detail": f"Audio data processing failed: {str(e)}"}), 500
 
 @app.route("/transcribe/", methods=["POST"])
 def transcribe_audio():
-    """Transcribes 'audio.wav' using Whisper and returns the recognized text."""
+    """메모리에 저장된 오디오 데이터를 Whisper로 인식합니다."""
     try:
+        global audio_data
+        if not audio_data:
+            return jsonify({"detail": "No audio data available"}), 400
+            
+        # 바이트 데이터를 임시 파일 객체로 변환
+        audio_buffer = io.BytesIO(audio_data)
+        
+        # 임시 버퍼에서 Whisper로 직접 처리
         # 언어 감지 먼저 수행
         segments, info = model.transcribe(
-            "audio.wav",
+            audio_buffer,
             beam_size=5,
             word_timestamps=False,
             language=None  # 자동 언어 감지 활성화
@@ -42,10 +60,14 @@ def transcribe_audio():
         
         detected_language = info.language
         print(f"감지된 언어: {detected_language}")
+        print(f"감지된 텍스트: {' '.join([segment.text for segment in segments])}")
+        
+        # 버퍼 포인터 리셋
+        audio_buffer.seek(0)
         
         # 감지된 언어로 다시 전사
         segments, _ = model.transcribe(
-            "audio.wav",
+            audio_buffer,
             beam_size=5,
             word_timestamps=False,
             language=detected_language
@@ -71,10 +93,231 @@ def search_youtube():
     except Exception as e:
         return jsonify({"detail": f"YouTube search failed: {str(e)}"}), 500
 
-@app.route("/download_and_play/<video_id>", methods=["GET"])
-def download_and_play(video_id):
-    """Downloads video from YouTube and returns the file path."""
-    return jsonify({"detail": "This endpoint is no longer available."}), 410
+@app.route("/download_video/", methods=["POST"])
+def download_video():
+    """Download a YouTube video and stream it to the client."""
+    try:
+        data = request.get_json()
+        video_id = data["video_id"]
+        video_url = f"https://www.youtube.com/watch?v={video_id}"
+        
+        # Create temp directory if it doesn't exist
+        temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp")
+        if not os.path.exists(temp_dir):
+            os.makedirs(temp_dir)
+            
+        # Generate unique filename
+        import time
+        temp_filepath = os.path.join(temp_dir, f"temp_video_{video_id}_{int(time.time())}.mp4")
+        
+        # Download options
+        ydl_opts = {
+            'format': 'mp4[height<=480]/bestvideo[height<=480]+bestaudio/best[height<=480]',
+            'quiet': True,
+            'no_warnings': True,
+            'noplaylist': True,
+            'outtmpl': temp_filepath,
+        }
+        
+        # Download the video
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=True)
+            video_title = info.get('title', 'Unknown')
+        
+        response = send_file(
+            temp_filepath,
+            mimetype='video/mp4',
+            as_attachment=True,
+            download_name=f"{video_title}.mp4"
+        )
+        response.headers['X-Video-Title'] = video_title
+        # Stream the file to the client
+        return response
+            
+    except Exception as e:
+        error_type = type(e).__name__
+        error_msg = str(e)
+        print(f"Video download failed: {error_type} - {error_msg}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"detail": f"Video download failed: {error_type} - {error_msg}"}), 500
+
+@app.route("/check_video_size/", methods=["POST"])
+def check_video_size():
+    """Check YouTube video size and duration."""
+    try:
+        data = request.get_json()
+        video_id = data["video_id"]
+        video_url = f"https://www.youtube.com/watch?v={video_id}"
+        
+        
+        # 메타데이터만 추출하는 옵션
+        ydl_opts = {
+            'format': 'best[height<=480]',
+            'quiet': True,
+            'no_warnings': True,
+            'noplaylist': True,
+            'skip_download': True,
+        }
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=False)
+            
+            # 비디오 정보 추출
+            filesize = info.get('filesize') or info.get('filesize_approx')
+            duration = info.get('duration')
+            title = info.get('title', 'Unknown')
+            
+            # 비디오 크기가 너무 큰지 확인 (100MB 기준)
+            size_limit_mb = 100
+            size_limit_bytes = size_limit_mb * 1024 * 1024
+            
+            # 시간 기준도 추가 (10분 초과는 일반적으로 단일 곡이 아님)
+            time_limit_seconds = 10 * 60
+            
+            too_large = False
+            too_long = False
+            
+            if filesize and filesize > size_limit_bytes:
+                too_large = True
+                print(f"비디오 크기 제한 초과: {filesize/1024/1024:.2f}MB > {size_limit_mb}MB")
+            
+            if duration and duration > time_limit_seconds:
+                too_long = True
+                print(f"비디오 길이 제한 초과: {duration/60:.2f}분 > 10분")
+            
+            # 결과 반환
+            result = {
+                'title': title,
+                'filesize': filesize,
+                'filesize_mb': filesize/1024/1024 if filesize else None,
+                'duration': duration,
+                'duration_min': duration/60 if duration else None,
+                'too_large': too_large,
+                'too_long': too_long,
+                'is_single_song': not (too_large or too_long)
+            }
+            
+            return jsonify(result)
+                
+    except Exception as e:
+        error_type = type(e).__name__
+        error_msg = str(e)
+        print(f"비디오 크기 확인 실패: {error_type} - {error_msg}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"detail": f"Video size check failed: {error_type} - {error_msg}"}), 500
+
+@app.route("/get_video_stream/", methods=["POST"])
+def get_video_stream():
+    """Return direct YouTube streaming URL instead of downloading."""
+    try:
+        data = request.get_json()
+        video_id = data["video_id"]
+        video_url = f"https://www.youtube.com/watch?v={video_id}"
+        
+        # Extract streaming URL without downloading
+        ydl_opts = {
+            'format': 'mp4[height<=480]/bestvideo[height<=480]+bestaudio/best[height<=480]',
+            'quiet': True,
+            'no_warnings': True,
+            'noplaylist': True,
+            'skip_download': True,  # Don't download, just get info
+        }
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=False)
+            video_title = info.get('title', 'Unknown')
+            
+            # Get the URL for the best format
+            formats = info.get('formats', [])
+            # Filter for MP4 format with both audio and video
+            suitable_formats = [
+                f for f in formats 
+                if f.get('ext') == 'mp4' and 
+                f.get('acodec') != 'none' and 
+                f.get('vcodec') != 'none' and
+                (f.get('height') or 0) <= 480
+            ]
+            
+            if not suitable_formats:
+                return jsonify({"detail": "No suitable format found"}), 404
+                
+            # Sort by resolution (height) in descending order and pick the best one
+            suitable_formats.sort(key=lambda x: x.get('height', 0), reverse=True)
+            best_format = suitable_formats[0]
+            print(best_format['url'])
+            
+            # Return URL and metadata
+            return jsonify({
+                "title": video_title,
+                "url": best_format['url'],
+                "duration": info.get('duration'),
+                "thumbnail": info.get('thumbnail')
+            })
+            
+    except Exception as e:
+        error_type = type(e).__name__
+        error_msg = str(e)
+        print(f"Error getting stream URL: {error_type} - {error_msg}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"detail": f"Failed to get stream URL: {error_type} - {error_msg}"}), 500
+    
+@app.route("/proxy_video/", methods=["GET"])
+def proxy_video():
+    """Proxy the YouTube video stream through the server."""
+    try:
+        video_id = request.args.get("video_id")
+        if not video_id:
+            return jsonify({"detail": "Missing video_id"}), 400
+        
+        video_url = f"https://www.youtube.com/watch?v={video_id}"
+        
+        ydl_opts = {
+            'format': 'mp4[height<=480]/bestvideo[height<=480]+bestaudio/best[height<=480]',
+            'quiet': True,
+            'no_warnings': True,
+            'noplaylist': True,
+            'skip_download': True,
+        }
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=False)
+            formats = info.get('formats', [])
+            suitable_formats = [
+                f for f in formats 
+                if f.get('ext') == 'mp4' and 
+                f.get('acodec') != 'none' and 
+                f.get('vcodec') != 'none' and 
+                (f.get('height') or 0) <= 480
+            ]
+            
+            if not suitable_formats:
+                return jsonify({"detail": "No suitable format found"}), 404
+                
+            suitable_formats.sort(key=lambda x: x.get('height', 0), reverse=True)
+            best_format = suitable_formats[0]
+            stream_url = best_format['url']
+        
+        # Use a common User-Agent in case it's needed by YouTube
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(stream_url, stream=True, headers=headers)
+        
+        def generate():
+            for chunk in r.iter_content(chunk_size=8192):
+                if chunk:
+                    yield chunk
+        
+        return Response(generate(), content_type="video/mp4")
+    
+    except Exception as e:
+        error_type = type(e).__name__
+        error_msg = str(e)
+        print(f"Error proxying video: {error_type} - {error_msg}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"detail": f"Failed to proxy video: {error_type} - {error_msg}"}), 500
 
 if __name__ == "__main__":
     app.run(host="192.168.55.18", port=8000)
