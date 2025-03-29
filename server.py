@@ -149,15 +149,13 @@ def check_video_size():
         data = request.get_json()
         video_id = data["video_id"]
         video_url = f"https://www.youtube.com/watch?v={video_id}"
-        
-        
-        # 메타데이터만 추출하는 옵션
+
         ydl_opts = {
-            'format': 'best[height<=480]',
+            'format': 'best[height<=480]',  # 포맷 조건 단순화
             'quiet': True,
             'no_warnings': True,
             'noplaylist': True,
-            'skip_download': True,
+            'skip_download': True
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -168,20 +166,11 @@ def check_video_size():
             duration = info.get('duration')
             title = info.get('title', 'Unknown')
             
-            # 비디오 크기가 너무 큰지 확인 (100MB 기준)
-            size_limit_mb = 100
-            size_limit_bytes = size_limit_mb * 1024 * 1024
-            
             # 시간 기준도 추가 (10분 초과는 일반적으로 단일 곡이 아님)
             time_limit_seconds = 10 * 60
-            
-            too_large = False
+
             too_long = False
-            
-            if filesize and filesize > size_limit_bytes:
-                too_large = True
-                print(f"비디오 크기 제한 초과: {filesize/1024/1024:.2f}MB > {size_limit_mb}MB")
-            
+
             if duration and duration > time_limit_seconds:
                 too_long = True
                 print(f"비디오 길이 제한 초과: {duration/60:.2f}분 > 10분")
@@ -193,9 +182,8 @@ def check_video_size():
                 'filesize_mb': filesize/1024/1024 if filesize else None,
                 'duration': duration,
                 'duration_min': duration/60 if duration else None,
-                'too_large': too_large,
                 'too_long': too_long,
-                'is_single_song': not (too_large or too_long)
+                'is_single_song': not too_long
             }
             
             return jsonify(result)
@@ -208,116 +196,50 @@ def check_video_size():
         traceback.print_exc()
         return jsonify({"detail": f"Video size check failed: {error_type} - {error_msg}"}), 500
 
-@app.route("/get_video_stream/", methods=["POST"])
-def get_video_stream():
-    """Return direct YouTube streaming URL instead of downloading."""
+
+@app.route("/download_merged_video/", methods=["POST"])
+def download_merged_video():
+    """비디오와 오디오를 병합하여 다운로드합니다."""
     try:
         data = request.get_json()
         video_id = data["video_id"]
         video_url = f"https://www.youtube.com/watch?v={video_id}"
         
-        # Extract streaming URL without downloading
+        # 임시 파일을 저장할 디렉토리 생성
+        temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp")
+        if not os.path.exists(temp_dir):
+            os.makedirs(temp_dir)
+            
         ydl_opts = {
-            'format': 'mp4[height<=480]/bestvideo[height<=480]+bestaudio/best[height<=480]',
+            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best',
             'quiet': True,
             'no_warnings': True,
             'noplaylist': True,
-            'skip_download': True,  # Don't download, just get info
+            'outtmpl': os.path.join(temp_dir, '%(id)s.%(ext)s'),
+            'merge_output_format': 'mp4'
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(video_url, download=False)
+            info = ydl.extract_info(video_url, download=True)
             video_title = info.get('title', 'Unknown')
+            output_path = os.path.join(temp_dir, f"{info['id']}.mp4")
             
-            # Get the URL for the best format
-            formats = info.get('formats', [])
-            # Filter for MP4 format with both audio and video
-            suitable_formats = [
-                f for f in formats 
-                if f.get('ext') == 'mp4' and 
-                f.get('acodec') != 'none' and 
-                f.get('vcodec') != 'none' and
-                (f.get('height') or 0) <= 480
-            ]
-            
-            if not suitable_formats:
-                return jsonify({"detail": "No suitable format found"}), 404
-                
-            # Sort by resolution (height) in descending order and pick the best one
-            suitable_formats.sort(key=lambda x: x.get('height', 0), reverse=True)
-            best_format = suitable_formats[0]
-            print(best_format['url'])
-            
-            # Return URL and metadata
-            return jsonify({
-                "title": video_title,
-                "url": best_format['url'],
-                "duration": info.get('duration'),
-                "thumbnail": info.get('thumbnail')
-            })
+            response = send_file(
+                output_path,
+                mimetype='video/mp4',
+                as_attachment=True,
+                download_name=f"{video_title}.mp4"
+            )
+            response.headers['X-Video-Title'] = video_title
+            return response
             
     except Exception as e:
         error_type = type(e).__name__
         error_msg = str(e)
-        print(f"Error getting stream URL: {error_type} - {error_msg}")
+        print(f"병합된 비디오 다운로드 실패: {error_type} - {error_msg}")
         import traceback
         traceback.print_exc()
-        return jsonify({"detail": f"Failed to get stream URL: {error_type} - {error_msg}"}), 500
-    
-@app.route("/proxy_video/", methods=["GET"])
-def proxy_video():
-    """Proxy the YouTube video stream through the server."""
-    try:
-        video_id = request.args.get("video_id")
-        if not video_id:
-            return jsonify({"detail": "Missing video_id"}), 400
-        
-        video_url = f"https://www.youtube.com/watch?v={video_id}"
-        
-        ydl_opts = {
-            'format': 'mp4[height<=480]/bestvideo[height<=480]+bestaudio/best[height<=480]',
-            'quiet': True,
-            'no_warnings': True,
-            'noplaylist': True,
-            'skip_download': True,
-        }
-        
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(video_url, download=False)
-            formats = info.get('formats', [])
-            suitable_formats = [
-                f for f in formats 
-                if f.get('ext') == 'mp4' and 
-                f.get('acodec') != 'none' and 
-                f.get('vcodec') != 'none' and 
-                (f.get('height') or 0) <= 480
-            ]
-            
-            if not suitable_formats:
-                return jsonify({"detail": "No suitable format found"}), 404
-                
-            suitable_formats.sort(key=lambda x: x.get('height', 0), reverse=True)
-            best_format = suitable_formats[0]
-            stream_url = best_format['url']
-        
-        # Use a common User-Agent in case it's needed by YouTube
-        headers = {"User-Agent": "Mozilla/5.0"}
-        r = requests.get(stream_url, stream=True, headers=headers)
-        
-        def generate():
-            for chunk in r.iter_content(chunk_size=8192):
-                if chunk:
-                    yield chunk
-        
-        return Response(generate(), content_type="video/mp4")
-    
-    except Exception as e:
-        error_type = type(e).__name__
-        error_msg = str(e)
-        print(f"Error proxying video: {error_type} - {error_msg}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"detail": f"Failed to proxy video: {error_type} - {error_msg}"}), 500
+        return jsonify({"detail": f"Failed to download merged video: {error_type} - {error_msg}"}), 500
 
 if __name__ == "__main__":
     app.run(host="192.168.55.18", port=8000)

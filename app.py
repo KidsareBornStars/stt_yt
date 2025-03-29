@@ -112,10 +112,7 @@ class MyApp(App):
                 return
             
             self.check_video_size(video_id)
-
-            # Use streaming by default (more efficient)
-            # You can use a configuration or preference setting to choose the mode
-            self.play_video(video_id, mode="stream")
+            self.play_video(video_id)
             
         except requests.exceptions.ConnectionError:
             self.info_label.text = "서버 연결 실패. 네트워크 상태를 확인하세요."
@@ -199,75 +196,47 @@ class MyApp(App):
             self.info_label.text += f"\n서버 연결 오류: {error_type}"
             return None
         
-    def stream_video(self, video_id):
-        """Stream YouTube video through the proxy endpoint."""
+    def play_video(self, video_id):
+        """최고 품질의 비디오와 오디오를 병합하여 재생합니다."""
         try:
-            # Build the proxy URL – now using GET with query parameter
-            proxy_url = f"{BASE_URL}/proxy_video/?video_id={video_id}"
+            self.info_label.text = "고품질 비디오 다운로드 중..."
             
-            self.info_label.text = "프록시를 통해 스트리밍 중..."
-            
-            # Remove the current video widget and create a new one with the proxy URL as source
-            self.layout.remove_widget(self.video)
-            self.video = UIVideo(
-                source=proxy_url,
-                state='stop',
-                size_hint=(1, 0.9),
-                options={'eos': 'loop'}
+            # 병합된 비디오 다운로드 요청
+            response = requests.post(
+                f"{BASE_URL}/download_merged_video/", 
+                json={"video_id": video_id},
+                stream=True
             )
-            self.layout.add_widget(self.video)
-            self.video.state = 'play'
-            
-            return proxy_url  # or return video title if you extract that info elsewhere
-        except Exception as e:
-            error_type = type(e).__name__
-            error_msg = str(e)
-            print(f"비디오 스트리밍 실패: {error_type} - {error_msg}")
-            import traceback
-            traceback.print_exc()
-            self.info_label.text = f'영상 스트리밍 실패: {error_type}'
-            return None
-        
-    def download_and_play(self, video_id):
-        """YouTube에서 비디오를 다운로드하고 재생합니다."""
-        try:
-            # 비디오 다운로드를 서버에 요청
-            response = requests.post(f"{BASE_URL}/download_video/", 
-                                  json={"video_id": video_id},
-                                  stream=True)
             
             if response.status_code != 200:
                 error_msg = response.json().get('detail', 'Unknown error')
-                self.info_label.text = f'다운로드 실패: {error_msg}'
-                return None, None
+                self.info_label.text = f'비디오 처리 실패: {error_msg}'
+                return None
             
             video_title = response.headers.get('X-Video-Title', 'Unknown')
-
-            # 임시 파일명 생성
-            temp_filename = os.path.join(tempfile.gettempdir(), f"temp_video_{int(time.time())}.mp4")
+            temp_file = os.path.join(tempfile.gettempdir(), f"temp_video_{int(time.time())}.mp4")
             
             # 스트리밍 응답을 파일로 저장
-            with open(temp_filename, 'wb') as f:
+            with open(temp_file, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
             
-            # Stop current video before switching to new one
+            # 이전 비디오 정리
             if self.video:
                 self.video.state = 'stop'
-                
-            # If we had a previous video, schedule it for cleanup
+            
             if self.current_video_path and os.path.exists(self.current_video_path):
                 self.schedule_cleanup(self.current_video_path)
             
-            # Track the new video
-            self.downloaded_videos.append(temp_filename)
-            self.current_video_path = temp_filename
+            # 새 비디오 추적
+            self.downloaded_videos.append(temp_file)
+            self.current_video_path = temp_file
             
-            # Update the video widget
+            # 비디오 위젯 업데이트
             self.layout.remove_widget(self.video)
             self.video = UIVideo(
-                source=temp_filename,
+                source=temp_file,
                 state='stop',
                 size_hint=(1, 0.9),
                 options={'eos': 'loop'}
@@ -275,17 +244,18 @@ class MyApp(App):
             self.layout.add_widget(self.video)
             self.video.state = 'play'
             
-            return temp_filename, video_title
+            self.info_label.text = f'재생 중인 영상: {video_title}'
+            return video_title
             
         except Exception as e:
             error_type = type(e).__name__
             error_msg = str(e)
-            print(f"비디오 다운로드 실패: {error_type} - {error_msg}")
+            print(f"비디오 처리 실패: {error_type} - {error_msg}")
             import traceback
             traceback.print_exc()
-            self.info_label.text = f'영상 스트리밍 실패: {error_type}'
-            return None, None
-    
+            self.info_label.text = f'비디오 처리 실패: {error_type}'
+            return None
+
     def cleanup_old_videos(self):
         """이전에 다운로드한 임시 비디오 파일을 삭제합니다."""
         # First, stop the current video playback
@@ -319,93 +289,6 @@ class MyApp(App):
         
         # Schedule deletion after specified delay (seconds)
         Timer(delay, delayed_delete).start()
-
-    def play_video(self, video_id, mode="stream"):
-        """
-        Unified method to handle video playback using streaming or downloading
-        
-        Args:
-            video_id: The YouTube video ID
-            mode: "stream" (default) or "download"
-        """
-        try:
-            self.info_label.text = f"비디오 {'스트리밍' if mode == 'stream' else '다운로드'} 중..."
-            
-            # Choose endpoint based on mode
-            endpoint = "/get_video_stream/" if mode == "stream" else "/download_video/"
-            
-            # Request video from server
-            response = requests.post(
-                f"{BASE_URL}{endpoint}", 
-                json={"video_id": video_id},
-                stream=(mode == "download")  # Stream response only for downloads
-            )
-            
-            if response.status_code != 200:
-                error_msg = response.json().get('detail', 'Unknown error')
-                self.info_label.text = f'비디오 처리 실패: {error_msg}'
-                return None
-            
-            # Get the video source and title
-            if mode == "stream":
-                # For streaming: get URL from JSON response
-                data = response.json()
-                video_title = data.get('title', 'Unknown')
-                video_source = data.get('url')
-                
-                # No temp file to track in this case
-                temp_file = None
-            else:
-                # For downloading: save to temp file
-                video_title = response.headers.get('X-Video-Title', 'Unknown')
-                temp_file = os.path.join(tempfile.gettempdir(), f"temp_video_{int(time.time())}.mp4")
-                
-                # Save streamed response to file
-                with open(temp_file, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-                
-                video_source = temp_file
-                
-                # Track downloaded file
-                self.downloaded_videos.append(temp_file)
-                
-                # If we had a previous video file, schedule it for cleanup
-                if self.current_video_path and os.path.exists(self.current_video_path):
-                    self.schedule_cleanup(self.current_video_path)
-                
-                # Update current path
-                self.current_video_path = temp_file
-            
-            # Stop current video playback
-            if self.video:
-                self.video.state = 'stop'
-                
-            # Update video widget with new source
-            self.layout.remove_widget(self.video)
-            self.video = UIVideo(
-                source=video_source,
-                state='stop',
-                size_hint=(1, 0.9),
-                options={'eos': 'loop'}
-            )
-            self.layout.add_widget(self.video)
-            self.video.state = 'play'
-            
-            # Update info label
-            self.info_label.text = f'재생 중인 영상: {video_title}'
-            
-            return video_title
-            
-        except Exception as e:
-            error_type = type(e).__name__
-            error_msg = str(e)
-            print(f"비디오 처리 실패: {error_type} - {error_msg}")
-            import traceback
-            traceback.print_exc()
-            self.info_label.text = f'비디오 처리 실패: {error_type}'
-            return None
 
     def on_stop(self):
         """앱 종료 시 임시 파일 정리"""
