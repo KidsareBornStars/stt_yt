@@ -145,14 +145,14 @@ def download_video():
 
 @app.route("/check_video_size/", methods=["POST"])
 def check_video_size():
-    """Check YouTube video size and duration."""
+    """YouTube 비디오 정보를 확인하고 반환합니다."""
     try:
         data = request.get_json()
         video_id = data["video_id"]
         video_url = f"https://www.youtube.com/watch?v={video_id}"
 
         ydl_opts = {
-            'format': 'best[height<=720]',  # 포맷 조건 단순화
+            'format': 'best[height<=720]',
             'quiet': True,
             'no_warnings': True,
             'noplaylist': True,
@@ -162,41 +162,21 @@ def check_video_size():
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(video_url, download=False)
             
-            # 비디오 정보 추출
-            filesize = info.get('filesize') or info.get('filesize_approx')
-            duration = info.get('duration')
-            title = info.get('title', 'Unknown')
-            
-            # 시간 기준도 추가 (10분 초과는 일반적으로 단일 곡이 아님)
-            time_limit_seconds = 10 * 60
-
-            too_long = False
-
-            if duration and duration > time_limit_seconds:
-                too_long = True
-                print(f"비디오 길이 제한 초과: {duration/60:.2f}분 > 10분")
-            
-            # 결과 반환
-            result = {
-                'title': title,
-                'filesize': filesize,
-                'filesize_mb': filesize/1024/1024 if filesize else None,
-                'duration': duration,
-                'duration_min': duration/60 if duration else None,
-                'too_long': too_long,
-                'is_single_song': not too_long
-            }
-            
-            return jsonify(result)
+            return jsonify({
+                'title': info.get('title', 'Unknown'),
+                'duration': info.get('duration'),
+                'filesize': info.get('filesize'),
+                'url': info.get('url'),
+                'format': info.get('format'),
+                'height': info.get('height'),
+                'width': info.get('width')
+            })
                 
     except Exception as e:
         error_type = type(e).__name__
         error_msg = str(e)
-        print(f"비디오 크기 확인 실패: {error_type} - {error_msg}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"detail": f"Video size check failed: {error_type} - {error_msg}"}), 500
-
+        print(f"비디오 정보 확인 실패: {error_type} - {error_msg}")
+        return jsonify({"detail": f"Video info check failed: {error_type} - {error_msg}"}), 500
 
 @app.route("/download_merged_video/", methods=["POST"])
 def download_merged_video():

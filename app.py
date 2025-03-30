@@ -195,52 +195,52 @@ class MyApp(App):
             return None
         
     def play_video(self, video_id):
-        """스트림을 임시 파일로 다운로드 후 재생합니다."""
+        """서버에서 비디오 정보를 받아와서 직접 다운로드 후 재생합니다."""
         try:
-            self.info_label.text = "스트림 정보 가져오는 중..."
+            self.info_label.text = "비디오 정보 확인 중..."
             
-            # 스트림 URL 요청
-            response = requests.post(
-                f"{BASE_URL}/get_stream_url/", 
-                json={"video_id": video_id}
-            )
+            # 비디오 정보 확인
+            response = requests.post(f"{BASE_URL}/check_video_size/", json={"video_id": video_id})
             
             if response.status_code != 200:
                 error_msg = response.json().get('detail', 'Unknown error')
-                self.info_label.text = f'스트림 처리 실패: {error_msg}'
+                self.info_label.text = f'비디오 정보 확인 실패: {error_msg}'
                 return None
             
-            stream_data = response.json()
-            video_title = stream_data['title']
-            stream_url = stream_data['stream_url']
+            video_info = response.json()
+            video_title = video_info.get('title', 'Unknown')
+            video_url = video_info.get('url')  # 서버에서 제공하는 직접 다운로드 URL
+            
+            if not video_url:
+                self.info_label.text = "비디오 URL을 가져올 수 없습니다."
+                return None
             
             # 임시 파일 생성
             import tempfile
             temp_dir = tempfile.gettempdir()
             temp_path = os.path.join(temp_dir, f"temp_video_{video_id}.mp4")
             
-            # 스트림 다운로드
-            self.info_label.text = "비디오 다운로드 중..."
-            response = requests.get(stream_url, stream=True)
-            total_size = int(response.headers.get('content-length', 0))
+            # yt-dlp를 사용하여 직접 다운로드
+            import yt_dlp
             
-            with open(temp_path, 'wb') as f:
-                if total_size == 0:  # 크기를 알 수 없는 경우
-                    f.write(response.content)
-                else:  # 크기를 알 수 있는 경우 진행률 표시
-                    downloaded = 0
-                    for data in response.iter_content(chunk_size=4096):
-                        downloaded += len(data)
-                        f.write(data)
-                        progress = int((downloaded / total_size) * 100)
-                        self.info_label.text = f"다운로드 중... {progress}%"
+            ydl_opts = {
+                'format': 'best[height<=720]',  # 720p 이하 최상 품질
+                'outtmpl': temp_path,
+                'quiet': True,
+                'no_warnings': True,
+                'progress_hooks': [self.download_progress_hook],
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                self.info_label.text = "비디오 다운로드 중..."
+                ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
             
             # 이전 비디오 정리
             if self.video:
                 self.video.state = 'stop'
                 self.layout.remove_widget(self.video)
             
-            # 다운로드된 임시 파일로 비디오 위젯 생성
+            # 다운로드된 파일로 비디오 위젯 생성
             self.video = UIVideo(
                 source=temp_path,
                 state='stop',
@@ -248,18 +248,17 @@ class MyApp(App):
                 options={
                     'eos': 'loop',
                     'sync': True,
-                    'framedrop': True
+                    'framedrop': True,
+                    'fast': True
                 }
             )
             
             self.layout.add_widget(self.video)
             self.video.state = 'play'
             
-            # 임시 파일 관리를 위해 리스트에 추가
+            # 임시 파일 관리
             self.downloaded_videos.append(temp_path)
             self.current_video_path = temp_path
-            
-            # 이전 임시 파일들 정리
             self.cleanup_old_videos()
             
             self.info_label.text = f'재생 중인 영상: {video_title}'
@@ -268,9 +267,25 @@ class MyApp(App):
         except Exception as e:
             error_type = type(e).__name__
             error_msg = str(e)
-            print(f"스트림 처리 실패: {error_type} - {error_msg}")
-            self.info_label.text = f'스트림 처리 실패: {error_type}'
+            print(f"비디오 처리 실패: {error_type} - {error_msg}")
+            self.info_label.text = f'비디오 처리 실패: {error_type}'
             return None
+
+    def download_progress_hook(self, d):
+        """다운로드 진행률을 표시합니다."""
+        if d['status'] == 'downloading':
+            try:
+                total_bytes = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
+                downloaded_bytes = d.get('downloaded_bytes', 0)
+                if total_bytes:
+                    progress = (downloaded_bytes / total_bytes) * 100
+                    self.info_label.text = f"다운로드 중... {progress:.1f}%"
+            except:
+                self.info_label.text = "다운로드 중..."
+        elif d['status'] == 'finished':
+            self.info_label.text = "다운로드 완료, 재생 준비 중..."
+        elif d['status'] == 'error':
+            self.info_label.text = "다운로드 실패"
 
     def cleanup_old_videos(self):
         """이전에 다운로드한 임시 비디오 파일을 삭제합니다."""
