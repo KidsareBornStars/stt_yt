@@ -14,6 +14,10 @@ import sounddevice as sd
 import scipy.io.wavfile as wavfile
 import os
 import io
+import tempfile
+from threading import Timer
+import time
+import traceback
 
 BASE_URL = "http://1.227.153.93:8000" # 배포용
 # BASE_URL = "http://192.168.55.18:8000" # 테스트용
@@ -75,17 +79,23 @@ class MyApp(App):
         if key == 286:  # 녹음
             self.record_and_process(None)
             return True
-        elif key == 287:  # 재생
-            if hasattr(self, 'video'):
-                self.video.state = 'play'
-            return True
-        elif key == 288:  # 일시정지
-            if hasattr(self, 'video'):
-                self.video.state = 'pause'
-            return True
-        elif key == 289:  # 정지
-            if hasattr(self, 'video'):
-                self.video.state = 'stop'
+        elif key in [287, 288, 289]:  # 재생, 일시정지, 정지
+            return self.handle_video_control(key)
+        return False
+
+    def handle_video_control(self, key):
+        """Handle video playback controls."""
+        if not hasattr(self, 'video'):
+            return False
+            
+        state_map = {
+            287: 'play',    # 재생
+            288: 'pause',   # 일시정지
+            289: 'stop'     # 정지
+        }
+        
+        if key in state_map:
+            self.video.state = state_map[key]
             return True
         return False
 
@@ -93,7 +103,8 @@ class MyApp(App):
         """Record audio, transcribe it, and play a related YouTube video."""
         try:
             self.info_label.text = "녹음 중..."
-            self.record_audio()
+            if not self.record_audio():
+                return
             
             self.info_label.text = "음성 인식 중..."
             text = self.transcribe_audio()
@@ -108,8 +119,7 @@ class MyApp(App):
             if not video_id:
                 self.info_label.text = f"'{text}'에 대한 비디오를 찾을 수 없습니다."
                 return
-            
-            self.check_video_size(video_id)
+
             self.play_video(video_id)
             
         except requests.exceptions.ConnectionError:
@@ -117,7 +127,6 @@ class MyApp(App):
         except Exception as e:
             self.info_label.text = f"오류 발생: {str(e)}"
             print(f"Error in record_and_process: {str(e)}")
-            import traceback
             traceback.print_exc()
 
     def record_audio(self):
@@ -143,13 +152,17 @@ class MyApp(App):
             if response.status_code == 200:
                 self.info_label.text = "녹음 완료"
                 print(response.json()["message"])
+                return True
             else:
-                self.info_label.text = "녹음 전송 실패"
-                print(f"Error: {response.json()['detail']}")
+                error_msg = response.json().get('detail', '알 수 없는 오류')
+                self.info_label.text = f"녹음 전송 실패: {error_msg}"
+                print(f"Error: {error_msg}")
+                return False
             
         except Exception as e:
             self.info_label.text = f"녹음 실패: {str(e)}"
             print(f"Recording error: {str(e)}")
+            return False
 
     def transcribe_audio(self):
         """Calls the server to transcribe audio."""
@@ -157,12 +170,12 @@ class MyApp(App):
         if response.status_code == 200:
             result = response.json()
             transcribed_text = result["text"]
-            # Label 업데이트
-            self.info_label.text = f'인식된 텍스트: {transcribed_text}'
             return transcribed_text
         else:
-            self.info_label.text = '음성 인식 실패'
-            print(f"Error: {response.json()['detail']}")
+            error_msg = response.json().get('detail', '알 수 없는 오류')
+            self.info_label.text = f'음성 인식 실패: {error_msg}'
+            print(f"Error: {error_msg}")
+            return None
 
     def search_youtube(self, query):
         """Calls the server to search YouTube."""
@@ -172,28 +185,11 @@ class MyApp(App):
             print(f"Found YouTube video ID: {video_id}")
             return video_id
         else:
-            print(f"Error: {response.json()['detail']}")
-
-    def check_video_size(self, video_id):
-        """서버를 통해 YouTube 비디오 크기를 확인합니다."""
-        try:
-            self.info_label.text += "\n비디오 정보 확인 중..."
-            response = requests.post(f"{BASE_URL}/check_video_size/", json={"video_id": video_id})
-            
-            if response.status_code == 200:
-                return response.json()
-            else:
-                error_msg = response.json().get('detail', 'Unknown error')
-                print(f"Error checking video size: {error_msg}")
-                self.info_label.text += f"\n비디오 정보 확인 실패: {error_msg}"
-                return None
-        except Exception as e:
-            error_type = type(e).__name__
-            error_msg = str(e)
-            print(f"비디오 크기 확인 실패: {error_type} - {error_msg}")
-            self.info_label.text += f"\n서버 연결 오류: {error_type}"
+            error_msg = response.json().get('detail', '알 수 없는 오류')
+            self.info_label.text = f"검색 실패: {error_msg}"
+            print(f"Error: {error_msg}")
             return None
-        
+
     def play_video(self, video_id):
         """서버에서 비디오 정보를 받아와서 직접 다운로드 후 재생합니다."""
         try:
@@ -203,32 +199,50 @@ class MyApp(App):
             response = requests.post(f"{BASE_URL}/check_video_size/", json={"video_id": video_id})
             
             if response.status_code != 200:
-                error_msg = response.json().get('detail', 'Unknown error')
+                error_msg = response.json().get('detail', '알 수 없는 오류')
                 self.info_label.text = f'비디오 정보 확인 실패: {error_msg}'
                 return None
             
             video_info = response.json()
             video_title = video_info.get('title', 'Unknown')
-            video_url = video_info.get('url')  # 직접 스트리밍 URL
+            video_url = video_info.get('url')
             
             if not video_url:
                 self.info_label.text = "비디오 URL을 가져올 수 없습니다."
                 return None
             
-            # 임시 파일 생성
-            import tempfile
-            temp_dir = tempfile.gettempdir()
-            temp_path = os.path.join(temp_dir, f"temp_video_{video_id}.mp4")
+            # 임시 파일 생성 및 다운로드
+            temp_path = self.download_video(video_id, video_url)
+            if not temp_path:
+                return None
+                
+            # 비디오 위젯 업데이트 및 재생
+            self.update_video_widget(temp_path, video_title)
             
-            # 직접 URL에서 다운로드
-            self.info_label.text = "비디오 다운로드 중..."
-            response = requests.get(video_url, stream=True)
-            total_size = int(response.headers.get('content-length', 0))
+            return video_title
+                
+        except Exception as e:
+            error_type = type(e).__name__
+            error_msg = str(e)
+            print(f"비디오 처리 실패: {error_type} - {error_msg}")
+            traceback.print_exc()
+            self.info_label.text = f'비디오 처리 실패: {error_type} - {error_msg}'
+            return None
             
+    def download_video(self, video_id, video_url):
+        """비디오 다운로드 로직."""
+        temp_dir = tempfile.gettempdir()
+        temp_path = os.path.join(temp_dir, f"temp_video_{video_id}.mp4")
+        
+        self.info_label.text = "비디오 다운로드 중..."
+        response = requests.get(video_url, stream=True)
+        total_size = int(response.headers.get('content-length', 0))
+        
+        try:
             with open(temp_path, 'wb') as f:
-                if total_size == 0:  # 크기를 알 수 없는 경우
+                if total_size == 0:
                     f.write(response.content)
-                else:  # 크기를 알 수 있는 경우 진행률 표시
+                else:
                     downloaded = 0
                     chunk_size = 1024 * 1024  # 1MB 단위로 다운로드
                     for data in response.iter_content(chunk_size=chunk_size):
@@ -236,44 +250,39 @@ class MyApp(App):
                         f.write(data)
                         progress = int((downloaded / total_size) * 100)
                         self.info_label.text = f"다운로드 중... {progress}%"
-            
-            # 이전 비디오 정리
-            if self.video:
-                self.video.state = 'stop'
-                self.layout.remove_widget(self.video)
-            
-            # 다운로드된 파일로 비디오 위젯 생성
-            self.video = UIVideo(
-                source=temp_path,
-                state='stop',
-                size_hint=(1, 0.9),
-                options={
-                    'eos': 'loop',
-                    'sync': True,
-                    'framedrop': True,
-                    'fast': True
-                }
-            )
-            
-            self.layout.add_widget(self.video)
-            self.video.state = 'play'
-            
-            # 임시 파일 관리
+                        
+            # 다운로드 성공한 경우에만 목록에 추가
             self.downloaded_videos.append(temp_path)
             self.current_video_path = temp_path
             self.cleanup_old_videos()
-            
-            self.info_label.text = f'재생 중인 영상: {video_title}'
-            return video_title
-            
+            return temp_path
         except Exception as e:
-            error_type = type(e).__name__
-            error_msg = str(e)
-            print(f"비디오 처리 실패: {error_type} - {error_msg}")
-            import traceback
-            traceback.print_exc()  # 상세한 에러 정보 출력
-            self.info_label.text = f'비디오 처리 실패: {error_type} - {error_msg}'
+            self.info_label.text = f"다운로드 실패: {str(e)}"
             return None
+        
+    def update_video_widget(self, video_path, video_title):
+        """비디오 위젯 업데이트 및 재생."""
+        # 이전 비디오 정리
+        if hasattr(self, 'video') and self.video:
+            self.video.state = 'stop'
+            self.layout.remove_widget(self.video)
+        
+        # 새 비디오 위젯 생성
+        self.video = UIVideo(
+            source=video_path,
+            state='stop',
+            size_hint=(1, 0.9),
+            options={
+                'eos': 'loop',
+                'sync': True,
+                'framedrop': True,
+                'fast': True
+            }
+        )
+        
+        self.layout.add_widget(self.video)
+        self.video.state = 'play'
+        self.info_label.text = f'재생 중인 영상: {video_title}'
 
     def cleanup_old_videos(self):
         """이전에 다운로드한 임시 비디오 파일을 삭제합니다."""
@@ -294,8 +303,6 @@ class MyApp(App):
 
     def schedule_cleanup(self, path, delay=5):
         """파일 삭제를 지연시켜 파일 잠금 문제를 방지합니다."""
-        from threading import Timer
-        
         def delayed_delete():
             try:
                 if os.path.exists(path):
@@ -316,7 +323,6 @@ class MyApp(App):
             self.video.state = 'stop'
             
         # Small delay to ensure video player releases the file
-        import time
         time.sleep(0.5)
         
         # Try to delete all temporary files
@@ -336,6 +342,5 @@ if __name__ == "__main__":
     # import logging
     # logger = logging.getLogger('kivy')
     # logger.setLevel(logging.DEBUG)
-    
     
     MyApp().run()
