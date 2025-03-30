@@ -152,7 +152,7 @@ def check_video_size():
         video_url = f"https://www.youtube.com/watch?v={video_id}"
 
         ydl_opts = {
-            'format': 'best[height<=480]',  # 포맷 조건 단순화
+            'format': 'best[height<=720]',  # 포맷 조건 단순화
             'quiet': True,
             'no_warnings': True,
             'noplaylist': True,
@@ -266,10 +266,11 @@ def get_stream_url():
         video_url = f"https://www.youtube.com/watch?v={video_id}"
         
         ydl_opts = {
-            'format': 'best[height<=720]',  # 720p 이하 최고 품질
+            'format': 'best[height<=720]',  # 포맷 조건 단순화
             'quiet': True,
             'no_warnings': True,
             'noplaylist': True,
+            'skip_download': True
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:

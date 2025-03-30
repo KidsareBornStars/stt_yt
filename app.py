@@ -195,7 +195,7 @@ class MyApp(App):
             return None
         
     def play_video(self, video_id):
-        """스트림 URL을 받아와서 직접 재생합니다."""
+        """스트림을 임시 파일로 다운로드 후 재생합니다."""
         try:
             self.info_label.text = "스트림 정보 가져오는 중..."
             
@@ -214,20 +214,53 @@ class MyApp(App):
             video_title = stream_data['title']
             stream_url = stream_data['stream_url']
             
+            # 임시 파일 생성
+            import tempfile
+            temp_dir = tempfile.gettempdir()
+            temp_path = os.path.join(temp_dir, f"temp_video_{video_id}.mp4")
+            
+            # 스트림 다운로드
+            self.info_label.text = "비디오 다운로드 중..."
+            response = requests.get(stream_url, stream=True)
+            total_size = int(response.headers.get('content-length', 0))
+            
+            with open(temp_path, 'wb') as f:
+                if total_size == 0:  # 크기를 알 수 없는 경우
+                    f.write(response.content)
+                else:  # 크기를 알 수 있는 경우 진행률 표시
+                    downloaded = 0
+                    for data in response.iter_content(chunk_size=4096):
+                        downloaded += len(data)
+                        f.write(data)
+                        progress = int((downloaded / total_size) * 100)
+                        self.info_label.text = f"다운로드 중... {progress}%"
+            
             # 이전 비디오 정리
             if self.video:
                 self.video.state = 'stop'
+                self.layout.remove_widget(self.video)
             
-            # 비디오 위젯 업데이트
-            self.layout.remove_widget(self.video)
+            # 다운로드된 임시 파일로 비디오 위젯 생성
             self.video = UIVideo(
-                source=stream_url,  # 스트림 URL 직접 사용
+                source=temp_path,
                 state='stop',
                 size_hint=(1, 0.9),
-                options={'eos': 'loop'}
+                options={
+                    'eos': 'loop',
+                    'sync': True,
+                    'framedrop': True
+                }
             )
+            
             self.layout.add_widget(self.video)
             self.video.state = 'play'
+            
+            # 임시 파일 관리를 위해 리스트에 추가
+            self.downloaded_videos.append(temp_path)
+            self.current_video_path = temp_path
+            
+            # 이전 임시 파일들 정리
+            self.cleanup_old_videos()
             
             self.info_label.text = f'재생 중인 영상: {video_title}'
             return video_title
