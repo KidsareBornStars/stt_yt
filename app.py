@@ -2,6 +2,7 @@ from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.video import Video as UIVideo
 from kivy.uix.label import Label
+from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.core.video import Video  
 from kivy.core.video.video_ffpyplayer import VideoFFPy
@@ -19,8 +20,12 @@ from threading import Timer
 import time
 import traceback
 
-BASE_URL = "http://1.227.153.93:8000" # 배포용
-# BASE_URL = "http://192.168.55.18:8000" # 테스트용
+# Get server URL from environment variable or use default
+# This makes it easier to switch between development and production
+BASE_URL = os.environ.get('SERVER_URL', "http://1.227.153.93:8000")  # Default to production
+
+# Uncomment for local testing
+# BASE_URL = "http://localhost:8000"  # Local development
 
 # 기존 폰트 등록 코드 대체
 def setup_system_fonts():
@@ -191,34 +196,47 @@ class MyApp(App):
             return None
 
     def play_video(self, video_id):
-        """서버에서 비디오 정보를 받아와서 직접 다운로드 후 재생합니다."""
+        """서버에서 비디오를 다운로드한 후 재생합니다."""
         try:
-            self.info_label.text = "비디오 정보 확인 중..."
+            self.info_label.text = "비디오 다운로드 중..."
             
-            # 비디오 정보 확인
-            response = requests.post(f"{BASE_URL}/check_video_size/", json={"video_id": video_id})
+            temp_dir = tempfile.gettempdir()
+            temp_path = os.path.join(temp_dir, f"temp_video_{video_id}.mp4")
             
-            if response.status_code != 200:
-                error_msg = response.json().get('detail', '알 수 없는 오류')
-                self.info_label.text = f'비디오 정보 확인 실패: {error_msg}'
-                return None
-            
-            video_info = response.json()
-            video_title = video_info.get('title', 'Unknown')
-            video_url = video_info.get('url')
-            
-            if not video_url:
-                self.info_label.text = "비디오 URL을 가져올 수 없습니다."
-                return None
-            
-            # 임시 파일 생성 및 다운로드
-            temp_path = self.download_video(video_id, video_url)
-            if not temp_path:
-                return None
+            # 서버로부터 직접 비디오 다운로드
+            with requests.post(
+                f"{BASE_URL}/download_video/", 
+                json={"video_id": video_id}, 
+                stream=True
+            ) as response:
+                if response.status_code != 200:
+                    error_msg = response.json().get('detail', '알 수 없는 오류')
+                    self.info_label.text = f'비디오 다운로드 실패: {error_msg}'
+                    return None
+                    
+                # 응답 헤더에서 비디오 제목 가져오기
+                video_title = response.headers.get('X-Video-Title', 'Unknown Video')
+                    
+                total_size = int(response.headers.get('content-length', 0))
                 
+                with open(temp_path, 'wb') as f:
+                    if total_size == 0:
+                        f.write(response.content)
+                    else:
+                        downloaded = 0
+                        for chunk in response.iter_content(chunk_size=1024*1024):  # 1MB chunks
+                            downloaded += len(chunk)
+                            f.write(chunk)
+                            progress = int(downloaded / total_size * 100)
+                            self.info_label.text = f"다운로드 중... {progress}%"
+            
+            # 다운로드 성공한 경우 목록에 추가
+            self.downloaded_videos.append(temp_path)
+            self.current_video_path = temp_path
+            self.cleanup_old_videos()
+            
             # 비디오 위젯 업데이트 및 재생
             self.update_video_widget(temp_path, video_title)
-            
             return video_title
                 
         except Exception as e:
@@ -262,28 +280,35 @@ class MyApp(App):
         
     def update_video_widget(self, video_path, video_title):
         """비디오 위젯 업데이트 및 재생."""
-        # 이전 비디오 정리
-        if hasattr(self, 'video') and self.video:
-            self.video.state = 'stop'
-            self.layout.remove_widget(self.video)
-        
-        # 새 비디오 위젯 생성
-        self.video = UIVideo(
-            source=video_path,
-            state='stop',
-            size_hint=(1, 0.9),
-            options={
-                'eos': 'loop',
-                'sync': True,
-                'framedrop': True,
-                'fast': True
-            }
-        )
-        
-        self.layout.add_widget(self.video)
-        self.video.state = 'play'
-        self.info_label.text = f'재생 중인 영상: {video_title}'
-
+        try:
+            # 이전 비디오 정리
+            if hasattr(self, 'video') and self.video:
+                self.video.state = 'stop'
+                self.layout.remove_widget(self.video)
+            
+            # Make sure the path exists
+            if not os.path.exists(video_path):
+                self.info_label.text = f"비디오 파일을 찾을 수 없음: {video_path}"
+                return
+                
+            print(f"Playing video from: {video_path}")
+            
+            # 새 비디오 위젯 생성
+            self.video = UIVideo(
+                source=video_path,
+                state='stop',
+                size_hint=(1, 0.9),
+                options={'eos': 'loop'}
+            )
+            
+            self.layout.add_widget(self.video)
+            
+            # Wait a moment before playing
+            Clock.schedule_once(lambda dt: setattr(self.video, 'state', 'play'), 0.5)
+            self.info_label.text = f'재생 중인 영상: {video_title}'
+        except Exception as e:
+            self.info_label.text = f"비디오 재생 실패: {str(e)}"
+            print(f"Error in update_video_widget: {traceback.format_exc()}")
     def cleanup_old_videos(self):
         """이전에 다운로드한 임시 비디오 파일을 삭제합니다."""
         # First, stop the current video playback

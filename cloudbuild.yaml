@@ -1,0 +1,26 @@
+steps:
+  # Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/stt-yt-app', '.']
+  
+  # Push the container image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/stt-yt-app']
+  
+  # Deploy container image to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+    - 'run'
+    - 'deploy'
+    - 'stt-yt-app'
+    - '--image=gcr.io/$PROJECT_ID/stt-yt-app'
+    - '--platform=managed'
+    - '--region=us-central1'
+    - '--allow-unauthenticated'
+    - '--memory=2Gi'
+    - '--cpu=2'
+    - '--set-env-vars=YOUTUBE_API_KEY=${_YOUTUBE_API_KEY},FLASK_ENV=production'
+
+images:
+  - 'gcr.io/$PROJECT_ID/stt-yt-app'
