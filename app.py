@@ -21,11 +21,17 @@ import time
 import traceback
 
 # Get server URL from environment variable or use default
-# This makes it easier to switch between development and production
-BASE_URL = os.environ.get('SERVER_URL', "http://10.178.0.3:8000")  # Default to production
+# Use the external IP address of your GCP VM
+# You can change this SERVER_IP = os.environ.get('SERVER_IP', "34.22.84.227")  # Replace with your VM's IP 
+# place with your VM's IP 
+BASE_URL = f"http://34.22.84.227"
 
-# Uncomment for local testing
+# For local testing
 # BASE_URL = "http://localhost:8000"  # Local development
+
+# To use the deployed server without modifying code, set the SERVER_IP environment variable:
+# Windows: set SERVER_IP=your_vm_ip_address
+# Linux/Mac: export SERVER_IP=your_vm_ip_address
 
 # 기존 폰트 등록 코드 대체
 def setup_system_fonts():
