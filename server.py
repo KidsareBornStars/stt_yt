@@ -89,6 +89,7 @@ def record_audio():
         global audio_data
         audio_data = audio_bytes
         
+        # Always return a valid response
         return jsonify({"message": "Audio data received successfully."})
     except Exception as e:
         return jsonify({"detail": f"Audio data processing failed: {str(e)}"}), 500
