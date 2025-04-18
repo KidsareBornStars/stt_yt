@@ -8,9 +8,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Install requirements
+# Install requirements with pinned versions to ensure compatibility
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+
+# Clean up pip cache and ensure we have compatible versions
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip uninstall -y flask werkzeug && \
+    pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir flask==2.0.1 werkzeug==2.0.1
 
 # Copy application code
 COPY . .
