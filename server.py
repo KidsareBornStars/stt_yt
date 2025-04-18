@@ -20,7 +20,9 @@ warnings.filterwarnings("ignore")
 app = Flask(__name__)
 
 # Global Whisper model initialization
-model = WhisperModel("turbo", device="cuda" if torch.cuda.is_available() else "cpu")
+# Change from "turbo" to "medium" which is one of the valid model sizes
+model = WhisperModel("large", device="cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {'cuda' if torch.cuda.is_available() else 'cpu'}")
 
 # Server initialization
 audio_data = None
