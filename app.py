@@ -18,6 +18,7 @@ import tempfile
 from threading import Timer
 import time
 import traceback
+import re
 
 BASE_URL = "http://1.227.153.93:8000" # 배포용
 # BASE_URL = "http://192.168.55.18:8000" # 테스트용
